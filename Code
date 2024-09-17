@@ -4,7 +4,7 @@ Code:
 // Company: 
 // Engineer: 
 // 
-// Create Date: 17.09.2024 00:32:02
+// Create Date: 17.09.2024 16:08:26
 // Design Name: 
 // Module Name: spi
 // Project Name: 
@@ -19,86 +19,108 @@ Code:
 // Additional Comments:
 // 
 //////////////////////////////////////////////////////////////////////////////////
-
-
 module spi(
-input clk,start,rst,
-input [11:0]din,
-output reg cs,mosi,done,
-output sclk);
-integer count=0;
-reg sclkt=0;
-parameter Divisor=20;
-always@(posedge clk or posedge rst)//added reset signal for controlling the start  from an unknown state
-if(rst)
-begin
-count<=0;
-sclkt<=0;
-end
-else
-begin
-if(count<(Divisor/2))//here 10 cycles and then toggle used parameter to control divider dynamically
-count<=count+1;
-else
-begin
-count<=0;
-sclkt<=~sclkt;
-end
-end
-
-parameter idle=0,start_tx=1,send=2,end_tx=3;
-reg [1:0] state=idle;
-reg [11:0]temp;
-integer bitcount=0;
-
-always@(posedge sclkt)
-begin
-case(state)
-idle:
-begin
-mosi<=1'b0;
-cs<=1'b1;
-done<=1'b0;
-if(start==1'b1)
-state<=start_tx;
-else
-state<=idle;
-end
-
-start_tx:
-begin
-cs<=1'b0;
-temp<=din;
-state<=send;
-end
-
-send:
-begin
-if(bitcount<=11)
-begin
-bitcount<=bitcount+1;
-mosi<=temp[bitcount];
-state<=send;
-end
-else
-begin
-bitcount<=0;
-state<=end_tx;
-mosi<=0;
-end
-end
-
-end_tx:
-begin
-cs<=1'b1;
-state<=idle;
-done<=1'b1;
-end
-default:
-state<=idle;
-endcase
-end
-assign sclk=sclkt;
+  input wire clk,
+  input wire start,
+  input wire rst,
+  input [11:0]din,
+  output reg cs,
+  output reg sclk,
+  output reg mosi,
+  output reg done
+);
+  reg [3:0] bit_count;//to record the number of bits transmitted
+  reg [31:0] count;
+  reg [1:0]state;
+  reg [11:0]shift_reg;//to store the data
+  reg sclk_enable;
+  parameter divisor=5;
+ 
+  localparam idle=0;
+  localparam start_tx=1;
+  localparam send=2;
+  localparam end_tx=3;
+ 
+  //SPI clock generator
+  always@(posedge clk or posedge rst)
+    begin
+      if(rst)
+        begin
+          count<=0;
+          sclk<=0;
+          sclk_enable<=0;
+        end
+      else if(sclk_enable)
+        begin
+          if(count==(divisor/2)-1)
+            begin
+              sclk<=~sclk;
+              count<=0;
+            end
+          else
+            begin
+              count<=count+1;
+            end
+            end
+          else
+            begin
+              sclk<=0;
+            end
+        end
+   //FSM for transmission
+      always@(posedge clk or posedge rst)
+        begin
+        if(rst)
+        begin
+          state<=idle;
+          cs<=1;
+          done<=0;
+          bit_count<=0;
+          shift_reg<=12'b0;
+          mosi<=0;
+          sclk_enable<=0;
+        end
+      else
+        begin
+          case(state)
+            idle:
+              begin
+                done<=0;
+                cs<=1;
+                if(start)
+                begin
+                  shift_reg<=din;
+                  bit_count<=0;
+                  sclk_enable<=1;
+                  state<=start_tx;
+                end
+              end
+            start_tx:
+              begin
+                cs<=0;
+                state<=send;
+              end
+            send:
+              begin
+                mosi<=shift_reg[11];
+                shift_reg<=shift_reg<<1;
+                bit_count<=bit_count+1;
+                if(bit_count==12)
+                  begin
+                    state<=end_tx;
+                  end
+              end
+            end_tx:
+              begin
+                cs<=1;
+                done<=1;
+                sclk_enable<=0;
+                state<=idle;
+              end
+            default:state<=idle;
+          endcase
+        end
+    end
 endmodule
 
 
@@ -110,7 +132,7 @@ TestBench:
 // Company: 
 // Engineer: 
 // 
-// Create Date: 17.09.2024 02:01:03
+// Create Date: 17.09.2024 16:10:17
 // Design Name: 
 // Module Name: spi_tb
 // Project Name: 
@@ -128,106 +150,121 @@ TestBench:
 
 
 module spi_tb();
-reg clk;
-reg start;
-reg [11:0]din;
-wire cs;
-wire mosi;
-wire done;
-wire sclk;
 
-spi uut(.clk(clk),
-.start(start),
-.din(din),
-.cs(cs),
-.mosi(mosi),
-.done(done),
-.sclk(sclk)
-);
-//clock generator
-initial begin
-clk=0;
-forever #5 clk=~clk;
-end
+    // Inputs
+    reg clk;
+    reg rst;
+    reg start;
+    reg [11:0] din;
+    wire cs;
+    wire mosi;
+    wire done;
+    wire sclk;
+   
+    spi uut (
+        .clk(clk),
+        .rst(rst),
+        .start(start),
+        .din(din),
+        .cs(cs),
+        .mosi(mosi),
+        .done(done),
+        .sclk(sclk)
+    );
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk;
+    end
+    
+    initial begin
+        rst = 1;              
+        start = 0;
+        din = 12'b000000000000;  
+        #20 rst = 0; 
+     
+        $display("Case 1: Normal transmission of data 101010101010");
+        din = 12'b101010101010;
+        start = 1;           
+        #10;
+        start = 0;            
 
+        fork
+            begin
+                while(done == 0)begin
+                    #10;
+                end
+                $display("Transmission Complete at time: %0t", $time);
+            end
+        join
 
-initial begin
-start=0;
-din=12'b000000000000;
-#100;
+        $display("Case 2: Transmission of all 1's data");
+        din = 12'b111111111111;
+        start = 1;
+        #10;
+        start = 0;
 
-$display("case 1:Transmission of data 1");
-din=12'b101010101010;
-start=1;
-#10;
-start=0;
+        fork
+            begin
+                while (done == 0) begin
+                    #10;
+                end
+                $display("Transmission Complete at time: %0t", $time);
+            end
+        join
+        $display("Case 3: Transmission of all 0's data");
+        din = 12'b000000000000;
+        start = 1;
+        #10;
+        start = 0;
 
-fork
-begin
-while(done==0)
-begin
-#10;
-end
-$display("transmission time: %t",$time);
-end
-join
+        fork
+            begin
+                while (done == 0) begin
+                    #10;
+                end
+                $display("Transmission Complete at time: %0t", $time);
+            end
+        join
 
-$display("case 2:Transmission of second data");
-din=12'b111111111111;
-start=1;
-#10;
-start=0;
+        $display("Case 4: Transmission of random data 110011001100");
+        din = 12'b110011001100;
+        start = 1;
+        #10;
+        start = 0;
+        fork
+            begin
+                while (done == 0) begin
+                    #10;
+                end
+                $display("Transmission Complete at time: %0t", $time);
+            end
+        join
+        $display("Case 5: Assert start mid-transmission");
+        din = 12'b100110011001;
+        start = 1;
+        #10;
+        start = 0;
+       
+       //Here it is checked that if start signal is given then there woulb be no change in mosi 
+        #20;
+        start = 1;
+        #10;
+        start = 0;
 
-fork
-begin
-while(done==0)
-begin
-#10;
-end
-$display("transmission time: %t",$time);
-end
-join
+        fork
+            begin
+                while (done == 0) begin
+                    #10;
+                end
+                $display("Transmission Complete after edge case at time: %0t", $time);
+            end
+        join
 
-$display("case 3:Transmission of 3rd data");
-din=12'b000000000000;
-start=1;
-#10;
-start=0;
-
-fork
-begin
-while(done==0)
-begin
-#10;
-end
-$display("transmission time: %t",$time);
-end
-join
-
-$display("case 4:TRansmission data this case is basically to determine that the transmission won't get affected with the current transmission");
-din=12'b101010101010;
-start=1;
-#10;
-start=0;
-#20;
-start=1;
-#10;
-start=0;
-
-fork
-begin
-while(done==0)
-begin
-#10;
-end
-$display("transmission time: %t",$time);
-end
-join
-$stop;
-end
-
-initial begin
-$monitor("Time=%0t | clk=%b | start=%b | din=%b |cs=%b | mosi=%b |sclk=%b | done=%b",
-$time,clk,start,din,cs,mosi,sclk,done);
-end
+        $stop;
+    end
+    initial begin
+        $monitor("Time=%0t | clk=%b | rst=%b | start=%b | din=%b | cs=%b | mosi=%b | sclk=%b | done=%b",
+                 $time, clk, rst, start, din, cs, mosi, sclk, done);
+    end
 endmodule
+
